@@ -1,0 +1,3 @@
+# Dados pessoais e configuração local: não publicar
+*.xlsx
+.claude/
