@@ -1,5 +1,5 @@
 // Rede primeiro (sempre a versão mais nova quando online), cache como reserva offline.
-const CACHE = 'an-pets-v1';
+const CACHE = 'an-pets-v2';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 

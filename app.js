@@ -42,6 +42,28 @@ function qty(value, unit) {
 const perUnitLabel = (unit) => (unit === 'g' ? 'R$/kg' : unit === 'ml' ? 'R$/L' : '');
 
 // ---------- dados iniciais (planilha "AN Ana") ----------
+function defaultOptions() {
+  const o = (name, avoid = false) => ({ id: uid(), name, avoid });
+  return [
+    {
+      id: 'opt-carne', title: 'Carnes', hint: 'Cortes que podem entrar como "Carne". Dá para variar entre eles.',
+      items: [o('Pernil suíno'), o('Sobrecoxa de frango'), o('Carne bovina'), o('Peito de frango'), o('Peito bovino', true), o('Cupim', true)],
+    },
+    {
+      id: 'opt-viscera', title: 'Vísceras musculares', hint: 'Opções para a "Víscera muscular".',
+      items: [o('Moela de frango'), o('Coração de boi'), o('Coração suíno')],
+    },
+    {
+      id: 'opt-vegetal', title: 'Vegetais', hint: `Fazer rodízio, somando ${VEG_TARGET} g/kg no total. As quantidades de cada um ficam a seu critério.`,
+      items: ['Repolho verde', 'Abobrinha', 'Beterraba', 'Pepino', 'Vagem', 'Cenoura', 'Brócolis', 'Couve-flor', 'Couve', 'Espinafre'].map((n) => o(n)),
+    },
+    {
+      id: 'opt-carbo', title: 'Carboidrato', hint: 'A batata-doce é preferível, por ter melhor índice glicêmico.',
+      items: [o('Batata-doce'), o('Batata inglesa'), o('Batata asterix')],
+    },
+  ];
+}
+
 function seed() {
   const ing = (id, name, category, unit, kcal, price, note = '') => ({ id, name, category, unit, kcal, price, note });
   const r = (id, ingredientId, mode, amount, everyDays = 1) => ({ id, ingredientId, mode, amount, everyDays });
@@ -84,6 +106,7 @@ function seed() {
       pet('bolt', 'Bolt', 7, {}, [[1, 3, 75, 65], [4, 7, 50, 120], [8, 10, 25, 200]]),
       pet('duda', 'Duda', 8, {}, [[1, 3, 80, 70], [4, 7, 55, 130], [8, 10, 30, 210]]),
     ],
+    options: defaultOptions(),
     notes: [
       'Manter a suplementação já usada, seguindo a recomendação do fabricante.',
       '',
@@ -97,6 +120,7 @@ function seed() {
 function normalize(s) {
   s.settings ??= { cycleDays: 20, cycleStart: todayISO() };
   s.ingredients ??= []; s.recipe ??= []; s.pets ??= []; s.notes ??= '';
+  s.options ??= defaultOptions(); // dados salvos antes de existir a lista de opções
   for (const p of s.pets) {
     p.overrides ??= {}; p.excluded ??= []; p.weights ??= []; p.notes ??= '';
     p.portions ??= 2; p.activity ??= 1.2;
@@ -120,7 +144,7 @@ function save() {
 }
 
 let state = load();
-const ui = { shopDays: null, shopPets: null };
+const ui = { shopDays: null, shopPets: null, perMeal: true };
 
 const ingById = (id) => state.ingredients.find((i) => i.id === id);
 const petById = (id) => state.pets.find((p) => p.id === id);
@@ -161,6 +185,20 @@ function calcPet(pet, days = state.settings.cycleDays) {
     missingPrice: used.some((r) => r.missingPrice),
   };
 }
+
+// Divide uma quantidade de AN (g/dia) entre os ingredientes, na mesma proporção da dieta completa.
+// Suplementos diários acompanham a mesma proporção; itens periódicos (fígado) ficam de fora.
+function composition(pet, anPerDay) {
+  const c = calcPet(pet);
+  const f = c.dailyFood ? anPerDay / c.dailyFood : 0;
+  const daily = c.rows.filter((r) => r.used && r.every === 1);
+  const isBase = (r) => r.ing.unit === 'g' && r.ing.category !== 'suplemento';
+  return {
+    base: daily.filter(isBase).map((r) => ({ ing: r.ing, g: r.daily * f })),
+    supp: daily.filter((r) => !isBase(r)).map((r) => ({ ing: r.ing, g: r.daily * f })),
+  };
+}
+const grams = (v) => `${fmt(v, v < 10 ? 1 : 0)} g`; // para a balança da cozinha
 
 function adaptationStatus(pet, date = todayISO()) {
   const a = pet.adaptation;
@@ -221,7 +259,7 @@ function viewHoje() {
     if (ad?.phase) {
       serve = `<div class="serve"><span class="tag">Transição · dia ${ad.day}</span>
         <div class="big">Ração ${fmt(ad.phase.kibble, 0)} g + AN ${fmt(ad.phase.an, 0)} g</div>
-        <div class="muted">por dia · AN em ${pet.portions}× de ${fmt(ad.phase.an / pet.portions, 0)} g</div></div>`;
+        <div class="muted">por dia · AN em ${pet.portions}× de ${fmt(ad.phase.an / pet.portions, 0)} g · <a href="#transicao">ver dia a dia</a></div></div>`;
     } else if (ad?.pending) {
       serve = `<div class="serve"><span class="tag">Transição começa em ${fmtDate(ad.start)}</span>
         <div class="muted">Até lá, segue com a alimentação atual.</div></div>`;
@@ -229,8 +267,17 @@ function viewHoje() {
       serve = `<div class="serve"><div class="big">${pet.portions}× ${fmt(c.portion, 0)} g de AN</div>
         <div class="muted">${fmt(c.dailyFood, 0)} g por dia</div></div>`;
     }
+    const anPerDay = ad?.phase ? ad.phase.an : ad?.pending ? null : c.dailyFood;
+    if (anPerDay) {
+      const meal = composition(pet, anPerDay / Math.max(1, pet.portions));
+      serve += `<details class="comp"><summary>Composição de cada refeição (${grams(anPerDay / Math.max(1, pet.portions))})</summary>
+        <ul class="list">${meal.base.map((x) => `<li><span>${esc(x.ing.name)}</span><span class="num">${grams(x.g)}</span></li>`).join('')}</ul>
+      </details>`;
+    }
+    // na transição, os suplementos acompanham a proporção de AN do dia
+    const suppFactor = ad?.phase && c.dailyFood ? ad.phase.an / c.dailyFood : 1;
     const extras = c.rows.filter((r) => r.used && r.every === 1 && r.ing.category === 'suplemento')
-      .map((r) => `<li><span>${esc(r.ing.name)}</span><span class="num">${qty(r.daily, r.ing.unit)}/dia</span></li>`);
+      .map((r) => `<li><span>${esc(r.ing.name)}</span><span class="num">${qty(r.daily * suppFactor, r.ing.unit)}/dia</span></li>`);
     const periodic = c.rows.filter((r) => r.used && r.every > 1).map((r) => {
       const next = nextOccurrence(r.every, t);
       return next === t
@@ -246,6 +293,104 @@ function viewHoje() {
       </section>`;
   }
   return html;
+}
+
+function viewTransicao() {
+  const pets = state.pets.filter((p) => p.adaptation.phases.length);
+  if (!pets.length) {
+    return `<section class="card"><h2>Transição</h2><p class="muted">Nenhum pet tem fases de transição cadastradas. Cadastre na página do pet, em <a href="#pets">Pets</a>.</p></section>`;
+  }
+  const t = todayISO();
+  const starts = [...new Set(pets.map((p) => p.adaptation.start || ''))];
+  const common = starts.length === 1 ? starts[0] : null; // '' = nenhuma data definida
+  const lastOf = (p) => Math.max(...p.adaptation.phases.map((ph) => ph.to));
+  const lastDay = Math.max(...pets.map(lastOf));
+  const dayOf = (p) => (p.adaptation.start ? daysBetween(p.adaptation.start, t) + 1 : null);
+  const weekday = (iso) => new Date(parseISO(iso)).toLocaleDateString('pt-BR', { weekday: 'short', timeZone: 'UTC' }).replace('.', '');
+  const dateLine = (d) => (common ? `<div class="k">${fmtDate(addDays(common, d - 1))} ${weekday(addDays(common, d - 1))}</div>` : '');
+
+  let status;
+  if (common === '') status = 'Defina a data de início para ver as datas de cada dia e o dia de hoje destacado.';
+  else if (common) {
+    const d = daysBetween(common, t) + 1;
+    status = d < 1 ? `Começa em ${fmtDateFull(common)}.`
+      : d <= lastDay ? `Hoje é o <b>dia ${d}</b> da transição.`
+      : `Concluída em ${fmtDateFull(addDays(common, lastDay - 1))}. Agora é só AN.`;
+  } else status = 'Os pets têm datas de início diferentes; o dia de hoje de cada um aparece destacado na coluna dele.';
+
+  const rows = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const cells = pets.map((p) => {
+      const ph = p.adaptation.phases.find((x) => d >= x.from && d <= x.to);
+      const today = dayOf(p) === d ? ' today' : '';
+      if (!ph) return `<td class="cell${today}"><span class="muted">–</span></td>`;
+      return `<td class="cell${today}"><div>Ração <b class="num">${fmt(ph.kibble, 0)} g</b></div><div>AN <b class="num">${fmt(ph.an, 0)} g</b></div><div class="k">AN ${p.portions}× ${fmt(ph.an / p.portions, 0)} g</div></td>`;
+    });
+    rows.push(`<tr><td><div class="day">Dia ${d}</div>${dateLine(d)}</td>${cells.join('')}</tr>`);
+  }
+  const fullCells = pets.map((p) => {
+    const c = calcPet(p);
+    const today = dayOf(p) != null && dayOf(p) > lastOf(p) ? ' today' : '';
+    return `<td class="cell${today}"><div>Só AN <b class="num">${fmt(c.dailyFood, 0)} g</b></div><div class="k">${p.portions}× ${fmt(c.portion, 0)} g</div></td>`;
+  });
+  rows.push(`<tr class="full"><td><div class="day">Dia ${lastDay + 1}+</div>${dateLine(lastDay + 1)}</td>${fullCells.join('')}</tr>`);
+
+  return `
+    <section class="card">
+      <h2>Transição da ração para AN</h2>
+      <div class="grid"><label class="field">Início da transição (todos os pets)<input type="date" id="tr-start" value="${common || ''}" data-field="transition.start"></label></div>
+      <p class="muted small" style="margin-top:8px">${status}</p>
+      ${starts.some(Boolean) ? '<button class="btn ghost" data-action="clear-transition">Limpar datas</button>' : ''}
+    </section>
+    <section class="card">
+      <div class="table-wrap tight"><table class="tt">
+        <thead><tr><th>Dia</th>${pets.map((p) => `<th>${esc(p.name)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.join('')}</tbody>
+      </table></div>
+      <p class="muted small" style="margin-top:8px">Quantidades por dia. As fases de cada pet são editadas na página dele, em <a href="#pets">Pets</a>.</p>
+    </section>
+    <section class="card">
+      <div class="spread">
+        <h2 style="margin:0">Composição da AN</h2>
+        <div class="seg" role="group" aria-label="Mostrar quantidades">
+          <button class="${ui.perMeal ? 'on' : ''}" data-action="comp-meal" aria-pressed="${ui.perMeal}">Por refeição</button>
+          <button class="${ui.perMeal ? '' : 'on'}" data-action="comp-day" aria-pressed="${!ui.perMeal}">Por dia</button>
+        </div>
+      </div>
+      <p class="muted small" style="margin-top:8px">Quanto de cada ingrediente vai na AN em cada fase, na mesma proporção da dieta completa.</p>
+    </section>
+    ${pets.map(compositionCard).join('')}`;
+}
+
+function compositionCard(pet) {
+  const c = calcPet(pet);
+  const div = ui.perMeal ? Math.max(1, pet.portions) : 1;
+  const cols = [
+    ...pet.adaptation.phases.map((ph) => ({ label: ph.from === ph.to ? `${ph.from}` : `${ph.from}–${ph.to}`, an: ph.an })),
+    { label: `${Math.max(...pet.adaptation.phases.map((ph) => ph.to)) + 1}+`, an: c.dailyFood, full: true },
+  ].map((col) => ({ ...col, comp: composition(pet, col.an / div) }));
+  const first = cols[0].comp;
+  const line = (label, values, cls = '') => `<tr class="${cls}"><td>${label}</td>${values.map((v, i) => `<td class="r num${cols[i].full ? ' fullcol' : ''}">${v}</td>`).join('')}</tr>`;
+
+  const base = first.base.map((x, i) => line(esc(x.ing.name), cols.map((col) => grams(col.comp.base[i].g))));
+  const vegIdx = first.base.map((x, i) => (x.ing.category === 'vegetal' ? i : -1)).filter((i) => i >= 0);
+  if (vegIdx.length > 1) {
+    base.push(line('<span class="muted">Vegetais (soma)</span>', cols.map((col) => `<span class="muted">${grams(sum(vegIdx, (i) => col.comp.base[i].g))}</span>`)));
+  }
+  const supp = first.supp.map((x, i) => line(esc(x.ing.name), cols.map((col) => qty(col.comp.supp[i].g, x.ing.unit))));
+
+  return `
+    <section class="card">
+      <h2>${esc(pet.name)} <span class="muted small">· ${ui.perMeal ? `por refeição (${pet.portions}×/dia)` : 'por dia'}</span></h2>
+      <div class="table-wrap tight"><table class="ct">
+        <thead><tr><th>Dias</th>${cols.map((col) => `<th class="r${col.full ? ' fullcol' : ''}">${col.label}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${line('<b>AN total</b>', cols.map((col) => `<b>${grams(col.an / div)}</b>`), 'tot')}
+          ${base.join('')}
+          ${supp.length ? `<tr><td colspan="${cols.length + 1}" class="k" style="padding-top:12px">Suplementos</td></tr>${supp.join('')}` : ''}
+        </tbody>
+      </table></div>
+    </section>`;
 }
 
 function viewPets() {
@@ -386,7 +531,29 @@ function viewReceita() {
   }).join('');
   const veg = sum(state.recipe.filter((i) => i.mode === 'perKg' && ingById(i.ingredientId)?.category === 'vegetal'), (i) => i.amount);
 
+  const groups = state.options.map((g) => {
+    const gid = esc(g.id);
+    const chip = (o) => `<span class="chip ${o.avoid ? 'avoid' : ''}">${o.avoid ? 'Evitar: ' : ''}${esc(o.name)}<button data-action="delete-option" data-group="${gid}" data-opt="${esc(o.id)}" aria-label="Remover ${esc(o.name)}">✕</button></span>`;
+    const use = g.items.filter((o) => !o.avoid).map(chip).join('');
+    const avoid = g.items.filter((o) => o.avoid).map(chip).join('');
+    return `<div class="opt-group">
+      <h3>${esc(g.title)}</h3>
+      ${g.hint ? `<p class="muted small">${esc(g.hint)}</p>` : ''}
+      <div class="chips">${use || '<span class="muted small">Nenhuma opção.</span>'}</div>
+      ${avoid ? `<div class="chips">${avoid}</div>` : ''}
+      <div class="add-opt">
+        <input id="opt-new-${gid}" placeholder="Nova opção" data-enter="add-option" data-group="${gid}" aria-label="Nova opção em ${esc(g.title)}">
+        <select id="opt-kind-${gid}" aria-label="Tipo"><option value="use">usar</option><option value="avoid">evitar</option></select>
+        <button class="btn ghost" data-action="add-option" data-group="${gid}">Adicionar</button>
+      </div>
+    </div>`;
+  }).join('');
+
   return `
+    <section class="card">
+      <h2>Opções de ingredientes</h2>
+      ${groups}
+    </section>
     <section class="card">
       <h2>Receita</h2>
       <p class="muted small">Vale para todos os pets. Para mudar só um pet, ajuste na página dele. Unidades: g, ml ou gotas, conforme o ingrediente.</p>
@@ -613,6 +780,27 @@ const actions = {
     for (const p of state.pets) { delete p.overrides[id]; p.excluded = p.excluded.filter((x) => x !== id); }
     commit();
   },
+  'add-option'(el) {
+    const g = state.options.find((x) => x.id === el.dataset.group);
+    const input = document.getElementById(`opt-new-${g.id}`);
+    const name = input.value.trim();
+    if (!name) return toast('Escreva o nome da opção.');
+    const avoid = document.getElementById(`opt-kind-${g.id}`).value === 'avoid';
+    g.items.push({ id: uid(), name, avoid });
+    input.value = '';
+    commit(`${name} adicionado em ${g.title}.`);
+  },
+  'delete-option'(el) {
+    const g = state.options.find((x) => x.id === el.dataset.group);
+    g.items = g.items.filter((o) => o.id !== el.dataset.opt);
+    commit();
+  },
+  'comp-meal'() { ui.perMeal = true; render(); },
+  'comp-day'() { ui.perMeal = false; render(); },
+  'clear-transition'() {
+    for (const p of state.pets) p.adaptation.start = null;
+    commit('Datas da transição removidas.');
+  },
   'add-ingredient'() {
     state.ingredients.push({ id: uid(), name: 'Novo ingrediente', category: 'vegetal', unit: 'g', kcal: 0, price: null, note: '' });
     commit();
@@ -661,6 +849,9 @@ function onField(el) {
     case 'settings.cycleDays': state.settings.cycleDays = Math.round(positive(num(v), state.settings.cycleDays)); break;
     case 'settings.cycleStart': if (v) state.settings.cycleStart = v; break;
     case 'notes': state.notes = v; break;
+    case 'transition.start':
+      for (const p of state.pets) if (p.adaptation.phases.length) p.adaptation.start = v || null;
+      break;
 
     case 'pet.name': pet.name = v.trim() || pet.name; break;
     case 'pet.weight': pet.weight = positive(num(v), pet.weight); break;
@@ -718,13 +909,14 @@ function commit(message) {
 
 // ---------- render / rotas ----------
 const app = document.getElementById('app');
-const titles = { hoje: 'Hoje', pets: 'Pets', pet: 'Pet', receita: 'Receita', compras: 'Compras', ajustes: 'Ajustes' };
+const titles = { hoje: 'Hoje', transicao: 'Transição', pets: 'Pets', pet: 'Pet', receita: 'Receita', compras: 'Compras', ajustes: 'Ajustes' };
 
 function render() {
   const focused = document.activeElement?.id;
   const [route = 'hoje', param] = location.hash.slice(1).split('/');
   let html;
   switch (route) {
+    case 'transicao': html = viewTransicao(); break;
     case 'pets': html = viewPets(); break;
     case 'pet': html = viewPet(petById(decodeURIComponent(param || ''))); break;
     case 'receita': html = viewReceita(); break;
@@ -759,6 +951,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.id === 'import-file') return importBackup(e.target);
   if (e.target.dataset?.field) onField(e.target);
+});
+document.addEventListener('keydown', (e) => {
+  const el = e.target.closest?.('[data-enter]');
+  if (el && e.key === 'Enter' && actions[el.dataset.enter]) { e.preventDefault(); actions[el.dataset.enter](el); }
 });
 window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
 
