@@ -1,7 +1,8 @@
 # AN Pets
 
 App web instalável (PWA) para a alimentação natural dos pets, criado a partir da planilha "AN Ana".
-Sem servidor e sem login: os dados ficam no navegador do aparelho (localStorage).
+Os dados ficam no navegador do aparelho (localStorage) e, com login Google, também no Firebase,
+para o mesmo histórico aparecer no PC e no celular.
 
 ## Rodar no computador
 
@@ -23,6 +24,7 @@ Depois, no celular:
 ## Arquivos
 
 - `index.html`, `styles.css`, `app.js`: o app (sem dependências e sem build).
+- `sync.js`: login Google e sincronização com o Firestore (SDK do Firebase via CDN).
 - `sw.js`: funcionamento offline.
 - `manifest.webmanifest`, `icons/`: instalação na tela inicial.
 

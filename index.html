@@ -17,6 +17,7 @@
 <body>
   <header class="top">
     <h1 id="title">AN Pets</h1>
+    <a id="sync-badge" class="sync-badge" href="#ajustes" hidden></a>
   </header>
 
   <main id="app" tabindex="-1"></main>
@@ -52,5 +53,6 @@
   <div id="toast" role="status" aria-live="polite"></div>
 
   <script src="app.js"></script>
+  <script type="module" src="sync.js" onerror="window.anSyncFailed = true; window.anApp && window.anApp.render()"></script>
 </body>
 </html>

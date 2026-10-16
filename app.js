@@ -141,6 +141,7 @@ function load() {
 function save() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch { toast('Não foi possível salvar neste navegador.'); }
+  window.anApp?.onSave?.(); // sync.js envia para a nuvem quando há login
 }
 
 let state = load();
@@ -613,6 +614,25 @@ function viewCompras() {
     </section>`;
 }
 
+function viewNuvem() {
+  const sync = window.anSync;
+  let body;
+  if (!sync && window.anSyncFailed) {
+    body = '<p class="muted small">Não foi possível carregar a sincronização (sem internet?). Os dados seguem salvos neste aparelho.</p>';
+  } else if (!sync) {
+    body = `<p class="muted small">${navigator.onLine ? 'Carregando…' : 'Sem internet: a sincronização volta quando a conexão voltar.'}</p>`;
+  } else if (sync.user) {
+    body = `<p>Conectado como <b>${esc(sync.user.email)}</b>.</p>
+      <p class="muted small" id="sync-status">${esc(sync.statusText)}</p>
+      <button class="btn ghost" data-action="cloud-signout">Sair</button>`;
+  } else {
+    body = `<p class="muted small">Entre com a sua conta Google para guardar os dados na nuvem e ver o mesmo histórico no PC e no celular. Sem login, os dados ficam só neste aparelho.</p>
+      ${sync.statusText ? `<p class="muted small">${esc(sync.statusText)}</p>` : ''}
+      <button class="btn" data-action="cloud-signin" ${sync.busy ? 'disabled' : ''}>Entrar com Google</button>`;
+  }
+  return `<section class="card"><h2>Nuvem</h2>${body}</section>`;
+}
+
 function viewAjustes() {
   const s = state.settings;
   const catOpts = (sel) => Object.entries(CATEGORIES).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
@@ -630,6 +650,7 @@ function viewAjustes() {
     </tr>`;
   }).join('');
   return `
+    ${viewNuvem()}
     <section class="card">
       <h2>Leva</h2>
       <div class="grid">
@@ -794,6 +815,10 @@ const actions = {
     const g = state.options.find((x) => x.id === el.dataset.group);
     g.items = g.items.filter((o) => o.id !== el.dataset.opt);
     commit();
+  },
+  'cloud-signin'() { window.anSync?.signIn(); },
+  'cloud-signout'() {
+    if (confirm('Sair da conta? Os dados continuam neste aparelho, mas deixam de sincronizar.')) window.anSync?.signOut();
   },
   'comp-meal'() { ui.perMeal = true; render(); },
   'comp-day'() { ui.perMeal = false; render(); },
@@ -970,6 +995,20 @@ function importBackup(input) {
     commit('Backup importado.');
   }).catch(() => toast('Arquivo de backup inválido.')).finally(() => { input.value = ''; });
 }
+
+// ponte para o sync.js (módulo separado, carregado depois)
+window.anApp = {
+  onSave: null,
+  getState: () => state,
+  replaceState(next) {
+    state = normalize(next);
+    ui.shopPets = null;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* segue só em memória */ }
+    render();
+  },
+  render: () => render(),
+  toast,
+};
 
 render();
 save();
